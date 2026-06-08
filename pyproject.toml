@@ -1,0 +1,15 @@
+[project]
+name = "ssm-mcp-server"
+version = "1.0.0"
+description = "MCP Server for AWS DevOps Agent - Windows Diagnostics via SSM"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "aws-cdk-lib>=2.258.0",
+    "constructs>=10.6.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]
