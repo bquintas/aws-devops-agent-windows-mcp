@@ -5,7 +5,61 @@ A serverless MCP server that enables AWS DevOps Agent to investigate Windows EC2
 ## Architecture
 
 ```
-DevOps Agent → API Gateway (IAM/SigV4) → Lambda → SSM RunCommand → Windows EC2
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  AWS DevOps Agent                                                           │
+│                                                                             │
+│  "Why is this Windows instance unhealthy?"                                  │
+│       │                                                                     │
+│       │  MCP tool call (JSON-RPC 2.0 over HTTPS)                            │
+│       ▼                                                                     │
+└───────┼─────────────────────────────────────────────────────────────────────┘
+        │
+        │ SigV4-signed request (assumes ssm-mcp-devops-agent-role)
+        ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  API Gateway (REST API, IAM Auth)                                           │
+│  POST /mcp                                                                  │
+│  Throttle: 10 req/sec                                                       │
+└───────┼─────────────────────────────────────────────────────────────────────┘
+        │
+        │ Lambda Proxy Integration
+        ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  Lambda: ssm-mcp-server (Python 3.12, 256 MB, 60s timeout)                  │
+│                                                                             │
+│  ┌────────────────────────────────────────────────────────────────────────┐ │
+│  │ MCP Protocol Handler (JSON-RPC 2.0)                                    │ │
+│  │  • initialize    → server capabilities                                 │ │
+│  │  • tools/list    → tool catalog                                        │ │
+│  │  • tools/call    → validate + execute                                  │ │
+│  └────────────────────────────────────────────────────────────────────────┘ │
+│  ┌────────────────────────────────────────────────────────────────────────┐ │
+│  │ Security Layer                                                         │ │
+│  │  • Instance ID allowlist (from SSM Parameter Store)                    │ │
+│  │  • PowerShell verb allowlist (Get-, Test-, Select-, ...)               │ │
+│  │  • Blocked pattern detection (no writes, no exfiltration)              │ │
+│  └────────────────────────────────────────────────────────────────────────┘ │
+└───────┼─────────────────────────────────────────────────────────────────────┘
+        │
+        │ ssm:SendCommand (cross-region capable)
+        ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  AWS Systems Manager                                                        │
+│  Document: AWS-RunPowerShellScript                                          │
+│  Target: EC2 instances tagged AllowMcpAccess=true                           │
+└───────┼─────────────────────────────────────────────────────────────────────┘
+        │
+        │ SSM Agent (pre-installed on Windows AMIs)
+        ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  Windows EC2 Instance (any region)                                          │
+│                                                                             │
+│  Executes read-only PowerShell → returns stdout/stderr via SSM              │
+│  Examples:                                                                  │
+│    • Get-WinEvent -LogName Application                                      │
+│    • Get-Service | Where-Object Status -eq Stopped                          │
+│    • Get-CimInstance Win32_OperatingSystem                                  │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 No SSH, no RDP, no ports opened. Communication goes through SSM service endpoints. Supports cross-region — the Lambda can target instances in any region via an optional `region` parameter on each tool.
